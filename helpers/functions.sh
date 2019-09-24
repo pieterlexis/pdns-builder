@@ -141,3 +141,40 @@ set_rpm_versions() {
   fi
   export BUILDER_RPM_VERSION
 }
+
+set_apk_versions() {
+  # Examples (BUILDER_RELEASE before is assumed to be 1pdns)
+  # Alpine is **very** strict on version numbers:
+  #   https://wiki.alpinelinux.org/wiki/APKBUILD_Reference#pkgver
+  # And we can't encode dirty **or** the branch name in the pkg version
+  #
+  # BUILDER_VERSION                BUILDER_APK_VERSION after    BUILDER_APK_RELEASE after
+  # 1.2.3                       => 1.2.3                        1pdns
+  # 1.2.3.0.g123456             => 1.2.3_p0_git$DATE            1pdns
+  # 1.2.3-alpha1                => 1.2.3_alpha1                 1pdns
+  # 1.2.3-alpha1.0.g123456      => 1.2.3_alpha1_p0_git$DATE     1pdns
+  # 1.2.3-alpha1.15.g123456     => 1.2.3_alpha1_p15_git$DATE    1pdns
+  # 1.2.3-rc2.12.branch.g123456 => 1.2.3_rc2_p12_git$DATE       1pdns
+  # 1.2.3.15.mybranch.g123456   => 1.2.3_p15_git$DATE           1pdns
+  # 1.2.3.15.g123456            => 1.2.3_p15_git$DATE           1pdns
+  version=${BUILDER_VERSION/-/_}
+  OIFS=$IFS
+  IFS='.' version_elems=(${version})
+  IFS=$OIFS
+
+  # version_elems has the version, split on '.', with potentially the last
+  # number of the version having _alpha or similar.
+  # e.g.
+  # 1 2 3_alpha1
+  # 1 2 3 dirty
+  # 1 2 3 0 g123456
+  # 1 2 3 12 g123456 dirty
+  # 1 2 3 12 branch g123456
+  # 1 2 3 12 branch g123456 dirty
+  if [ ${#version_elems[@]} -le 4 ]; then
+    export BUILDER_APK_VERSION="${version_elems[0]}.${version_elems[1]}.${version_elems[2]}"
+  else
+    export BUILDER_APK_VERSION="${version_elems[0]}.${version_elems[1]}.${version_elems[2]}_p${version_elems[3]}_git$(date +%Y%m%d%H%M)"
+  fi
+  export BUILDER_APK_RELEASE=${BUILDER_RELEASE%%pdns}
+}
