@@ -6,12 +6,53 @@ helpers=$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )
 
 source "$helpers/functions.sh"
 
+debunpackdir=/packages
+mkdir -p $debunpackdir
+
+function debdir_hash {
+  local debdir="$1/debian"
+  local n=$(basename "$1")
+  local h=$(sha1sum $(find $debdir -type f -maxdepth 1 | LC_ALL=C sort) | sha1sum | awk '{print $1}')
+  echo "$n.$h"
+}
+
+function new_debs {
+  diff -u /tmp/debs-before /tmp/debs-after | tee /tmp/debs-diff | grep -v '^[+][+]' | grep '^[+]' | sed 's/^[+]//'
+}
+
+function deb_file_list {
+  find "$debunpackdir" -type f | sed "s|${debunpackdir}/||" | LC_ALL=C sort
+}
+
+function check_cache {
+  local pkgname="$(dirname $1)"
+  local h=$(debdir_hash "$1")
+  if [ -f "/cache/old/${h}.tar" ]; then
+    echo "* FOUND IN CACHE: $pkgname"
+    tar -C "${debunpackdir}" -xvf "/cache/old/$h.tar"
+    return 0
+  fi
+  return 1
+}
+
+cache=
+if [ ! -z "$BUILDER_CACHE" ] && [ ! -z "$BUILDER_CACHE_THIS" ]; then
+    cache=1
+    mkdir -p /cache/new
+fi
+
+declare -A skip_debs # associative array (dict)
 dirs=()
 for dir in "$@"; do
   # If BUILDER_PACKAGE_MATCH is set, only build the packages that match, otherwise build all
   if [ -z "$BUILDER_PACKAGE_MATCH" ] || [[ $dir = *$BUILDER_PACKAGE_MATCH* ]]; then
     if [ ! -d ${dir}/debian ]; then
       echo "${dir}/debian does not exist, can not build!"
+      continue
+    fi
+    if [ "$cache" = "1" ] && check_cache "$dir"; then
+      skip_debs[$dir]=1
+      echo "::: $dir (cached)"
       continue
     fi
     dirs+=($dir)
@@ -31,6 +72,9 @@ for dir in "${dirs[@]}"; do
 done
 
 for dir in "${dirs[@]}"; do
+  # hash _before_ building as we don't want changed dirs
+  h=$(debdir_hash "${dir}")
+
   echo "==================================================================="
   echo "-> ${dir}"
   pushd "${dir}"
@@ -74,6 +118,20 @@ $sourcename (${epoch_string}${BUILDER_DEB_VERSION}-${BUILDER_DEB_RELEASE}.${dist
 EOF
   fi
 
+  deb_file_list > /tmp/debs-before
   fakeroot debian/rules binary || exit 1
+
+  if [ "$cache" = "1" ]; then
+    pushd ..
+    set -x
+    cp *.deb $debunpackdir
+    cp *.ddeb $debunpackdir || true
+    deb_file_list > /tmp/debs-after
+    new_debs | sed 's/^/NEW: /'
+    cat /tmp/debs-diff | sed 's/^/DIFF: /'
+
+    tar -C "$debunpackdir" -cvf "/cache/new/$h.tar" $(new_debs)
+    popd
+  fi
   popd
 done
